@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Direction, TileData, GameState } from '../types';
 import { GRID_SIZE } from '../constants';
 
-const createEmptyGrid = () => Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+const generateId = () => Math.random().toString(36).substr(2, 9);
 
 export const useGameLogic = () => {
   const [gameState, setGameState] = useState<GameState>({
@@ -13,8 +13,6 @@ export const useGameLogic = () => {
     gameOver: false,
     won: false,
   });
-
-  const generateId = () => Math.random().toString(36).substr(2, 9);
 
   const spawnTile = useCallback((tiles: TileData[]): TileData[] => {
     const occupied = new Set(tiles.map(t => `${t.row}-${t.col}`));
@@ -53,7 +51,8 @@ export const useGameLogic = () => {
       tiles: initialTiles,
       score: 0,
       gameOver: false,
-      won: false
+      won: false,
+      history: undefined
     }));
   }, [spawnTile]);
 
@@ -61,21 +60,40 @@ export const useGameLogic = () => {
     initGame();
   }, [initGame]);
 
+  const undo = useCallback(() => {
+    setGameState(prev => {
+      if (!prev.history) return prev;
+      return {
+        ...prev,
+        tiles: prev.history.tiles,
+        score: prev.history.score,
+        gameOver: false,
+        history: undefined
+      };
+    });
+  }, []);
+
   const move = useCallback((direction: Direction) => {
     setGameState(prev => {
       if (prev.gameOver) return prev;
 
-      let newTiles: TileData[] = prev.tiles.map(t => ({ ...t, isNew: false, mergedFrom: undefined }));
+      const currentTilesClone = prev.tiles.map(t => ({ ...t }));
+      const currentScore = prev.score;
+
+      let newTiles: TileData[] = prev.tiles.map(t => ({ 
+        ...t, 
+        isNew: false, 
+        isMerged: false,
+        mergedFrom: undefined 
+      }));
+      
       let scoreInc = 0;
       let moved = false;
-
       const isReverse = direction === 'DOWN' || direction === 'RIGHT';
       const isVertical = direction === 'UP' || direction === 'DOWN';
 
       for (let i = 0; i < GRID_SIZE; i++) {
         let line: (TileData | null)[] = Array(GRID_SIZE).fill(null);
-        
-        // Extract line
         for (let j = 0; j < GRID_SIZE; j++) {
           const r = isVertical ? j : i;
           const c = isVertical ? i : j;
@@ -84,11 +102,8 @@ export const useGameLogic = () => {
         }
 
         if (isReverse) line.reverse();
-
-        // Compress
         let newLine: (TileData | null)[] = line.filter(t => t !== null);
         
-        // Merge
         for (let j = 0; j < newLine.length - 1; j++) {
           const curr = newLine[j];
           const next = newLine[j + 1];
@@ -98,9 +113,10 @@ export const useGameLogic = () => {
             const mergedTile: TileData = {
               id: generateId(),
               value: mergedVal,
-              row: 0, // temp
-              col: 0, // temp
-              mergedFrom: [curr.id, next.id]
+              row: 0,
+              col: 0,
+              mergedFrom: [curr.id, next.id],
+              isMerged: true
             };
             newLine[j] = mergedTile;
             newLine.splice(j + 1, 1);
@@ -108,23 +124,19 @@ export const useGameLogic = () => {
           }
         }
 
-        // Fill remaining with null
         while (newLine.length < GRID_SIZE) newLine.push(null);
         if (isReverse) newLine.reverse();
 
-        // Update positions back to tiles array
         newLine.forEach((tile, index) => {
           if (!tile) return;
           const r = isVertical ? index : i;
           const c = isVertical ? i : index;
-          
           const originalTile = newTiles.find(t => t.id === tile.id);
           if (originalTile) {
             if (originalTile.row !== r || originalTile.col !== c) moved = true;
             originalTile.row = r;
             originalTile.col = c;
           } else {
-            // It's a newly merged tile
             tile.row = r;
             tile.col = c;
             newTiles.push(tile);
@@ -133,37 +145,26 @@ export const useGameLogic = () => {
         });
       }
 
-      // Filter out merged parents
       const mergedIds = new Set(newTiles.flatMap(t => t.mergedFrom || []));
       newTiles = newTiles.filter(t => !mergedIds.has(t.id));
-
       if (!moved) return prev;
 
       const updatedTiles = spawnTile(newTiles);
       const newScore = prev.score + scoreInc;
       
-      // Game Over Check
-      let gameOver = false;
-      if (updatedTiles.length === GRID_SIZE * GRID_SIZE) {
-        gameOver = true;
-        // Check if any merges possible
-        const directions: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
-        for (const dir of directions) {
-             // Simplify: if any neighbors have same value
-        }
-        // Basic check for full board and no adjacent matches
-        const grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(0));
-        updatedTiles.forEach(t => grid[t.row][t.col] = t.value);
-        
-        let canMove = false;
+      const grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(0));
+      updatedTiles.forEach(t => grid[t.row][t.col] = t.value);
+      
+      let canMove = false;
+      if (updatedTiles.length < GRID_SIZE * GRID_SIZE) {
+        canMove = true;
+      } else {
         for (let r = 0; r < GRID_SIZE; r++) {
           for (let c = 0; c < GRID_SIZE; c++) {
             if (r < GRID_SIZE - 1 && grid[r][c] === grid[r+1][c]) canMove = true;
             if (c < GRID_SIZE - 1 && grid[r][c] === grid[r][c+1]) canMove = true;
           }
         }
-        if (!canMove) gameOver = true;
-        else gameOver = false;
       }
 
       return {
@@ -171,11 +172,15 @@ export const useGameLogic = () => {
         tiles: updatedTiles,
         score: newScore,
         bestScore: Math.max(prev.bestScore, newScore),
-        gameOver,
-        won: updatedTiles.some(t => t.value === 2048)
+        gameOver: !canMove,
+        won: updatedTiles.some(t => t.value === 2048),
+        history: {
+          tiles: currentTilesClone,
+          score: currentScore
+        }
       };
     });
   }, [spawnTile]);
 
-  return { gameState, move, initGame };
+  return { gameState, move, initGame, undo };
 };

@@ -8,6 +8,7 @@ export interface TileData {
   col: number;
   mergedFrom?: string[];
   isNew?: boolean;
+  isMerged?: boolean;
 }
 
 export interface GameState {
@@ -16,4 +17,21 @@ export interface GameState {
   bestScore: number;
   gameOver: boolean;
   won: boolean;
+  history?: {
+    tiles: TileData[];
+    score: number;
+  };
+}
+
+export type MultiplayerStatus = 'idle' | 'searching' | 'waiting' | 'ready' | 'countdown' | 'playing' | 'ended';
+
+export interface MultiplayerState {
+  roomCode: string | null;
+  status: MultiplayerStatus;
+  isHost: boolean;
+  opponentScore: number;
+  opponentReady: boolean;
+  localReady: boolean;
+  winner: 'local' | 'opponent' | null;
+  error: string | null;
 }

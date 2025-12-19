@@ -1,44 +1,76 @@
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import GameScene from './components/GameScene';
 import Overlay from './components/Overlay';
 import { useGameLogic } from './hooks/useGameLogic';
+import { useMultiplayer } from './hooks/useMultiplayer';
 
 const App: React.FC = () => {
-  const { gameState, move, initGame } = useGameLogic();
+  const { gameState, move, initGame, undo } = useGameLogic();
+  const { mpState, createRoom, joinRoom, setReady, startGame, resetMp } = useMultiplayer(gameState.score, gameState.gameOver);
   const touchStartRef = useRef<{ x: number, y: number } | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
 
   useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+      setTimeout(() => setShowInstallBanner(true), 3000);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    
     const handleKeyDown = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case 'ArrowUp':
+      const key = e.key.toLowerCase();
+      
+      // En mode multijoueur, on bloque les touches sauf si la partie a commencé (playing)
+      // En mode solo (idle), on laisse jouer normalement
+      if (mpState.status !== 'playing' && mpState.status !== 'idle') return;
+
+      switch (key) {
+        case 'arrowup':
         case 'w':
-        case 'W':
           move('UP');
           break;
-        case 'ArrowDown':
+        case 'arrowdown':
         case 's':
-        case 'S':
           move('DOWN');
           break;
-        case 'ArrowLeft':
+        case 'arrowleft':
         case 'a':
-        case 'A':
           move('LEFT');
           break;
-        case 'ArrowRight':
+        case 'arrowright':
         case 'd':
-        case 'D':
           move('RIGHT');
+          break;
+        case 'z':
+        case 'u':
+          undo();
           break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [move]);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, [move, undo, mpState.status]);
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setInstallPrompt(null);
+      setShowInstallBanner(false);
+    }
+  };
 
   const handleTouchStart = (e: React.TouchEvent) => {
+    if (mpState.status !== 'playing' && mpState.status !== 'idle') return;
     touchStartRef.current = {
       x: e.touches[0].clientX,
       y: e.touches[0].clientY
@@ -53,7 +85,6 @@ const App: React.FC = () => {
     const absX = Math.abs(dx);
     const absY = Math.abs(dy);
 
-    // Minimum swipe distance threshold (30px)
     if (Math.max(absX, absY) > 30) {
       if (absX > absY) {
         move(dx > 0 ? 'RIGHT' : 'LEFT');
@@ -64,23 +95,41 @@ const App: React.FC = () => {
     touchStartRef.current = null;
   };
 
+  // Synchronisation du début de jeu Versus
+  const onCountdownEnd = () => {
+    initGame();
+    startGame();
+  };
+
   return (
     <div 
       className="relative w-full h-full bg-[#050505] overflow-hidden"
-      style={{ touchAction: 'none' }} // Explicitly disable browser touch behavior
+      style={{ touchAction: 'none' }}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
       {/* Dynamic Background Gradients */}
       <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#7000ff] blur-[150px] opacity-[0.15] animate-pulse pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-[#ff007a] blur-[150px] opacity-[0.15] animate-pulse pointer-events-none" style={{ animationDelay: '1s' }} />
-      <div className="absolute top-[30%] right-[10%] w-[30%] h-[30%] rounded-full bg-[#00f2ff] blur-[120px] opacity-[0.08] animate-pulse pointer-events-none" style={{ animationDelay: '2s' }} />
       
-      {/* 3D Game Layer */}
+      {/* 3D Scene Layer */}
       <GameScene tiles={gameState.tiles} />
       
-      {/* UI Layer */}
-      <Overlay gameState={gameState} onRestart={initGame} />
+      {/* UI Overlay Layer */}
+      <Overlay 
+        gameState={gameState} 
+        mpState={mpState}
+        onRestart={initGame} 
+        onUndo={undo} 
+        onInstall={installPrompt ? handleInstall : undefined}
+        showInstallBanner={showInstallBanner}
+        onDismissInstall={() => setShowInstallBanner(false)}
+        onCreateRoom={createRoom}
+        onJoinRoom={joinRoom}
+        onReady={setReady}
+        onCountdownEnd={onCountdownEnd}
+        onResetMp={resetMp}
+      />
     </div>
   );
 };
